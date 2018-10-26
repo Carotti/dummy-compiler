@@ -29,6 +29,7 @@ Inductive Stmt :=
   | SIf (cond : Var) (trueEval falseEval : Stmt) (* if cond == 0 then falseEval else trueEval *)
   | SSeq (s1 s2 : Stmt) (* s1 ; s2 *)
   | SLit (a : Var) (v : Z) (* a = $v *)
+  | SNop
   .
 
 Definition inc_eval_log (res : option (Z * Regs)) (inc : Z) :=
@@ -48,11 +49,13 @@ Fixpoint eval_stmt_log (s : Stmt) (fuel : nat) (r : Regs) :=
                            | Some (count, r') => inc_eval_log (eval_stmt_log s2 f r') count
                            end
            | SLit a v => Some (1%Z, put a v r)
+           | SNop => Some (1%Z, r)
            end
   end.
 
-Definition var_1 := 1.
-Definition var_a := 2.
+Definition var_a := 1.
+Definition var_b := 2.
+Definition var_tmp := 3.
 
 (* Test stmt, loads n into var_a and doubles it *)
 Definition eg_double_stmt n :=
@@ -75,6 +78,7 @@ Inductive Instr :=
   | IJump (pc : nat) 
   | IBeqz (a : Var) (pc : nat)
   | IImm (a : Var) (v : Z)
+  | INop
   .
 
 Fixpoint compile_stmt (s : Stmt) :=
@@ -82,19 +86,21 @@ Fixpoint compile_stmt (s : Stmt) :=
   | SAdd a b c => [IAdd a b c]
   | SIf c t f => match (compile_stmt t) with
                  | t' => match (compile_stmt f) with
-                         | f' => [IBeqz c (length t')] ++ t' ++ [IJump (length f')] ++ f'
+                         | f' => [IBeqz c (1 + (length t'))] ++ t' ++ [IJump (length f')] ++ f'
                          end
                  end
   | SSeq s1 s2 => (compile_stmt s1) ++ (compile_stmt s2)
   | SLit a v => [IImm a v]
+  | SNop => [INop]
   end.
 
 Fixpoint eval_instr_log_single i regs pc :=
   match i with
   | IAdd a b c => (1%Z, put a ((get b regs) + (get c regs)) regs, pc + 1)
-  | IJump pc' => (1%Z, regs, pc')
-  | IBeqz a pc' => (1%Z, regs, if (Z.eqb (get a regs) 0%Z) then pc' else pc + 1)
+  | IJump pc' => (1%Z, regs, pc + pc' + 1)
+  | IBeqz a pc' => (1%Z, regs, if (Z.eqb (get a regs) 0%Z) then pc + pc' + 1 else pc + 1)
   | IImm a v => (1%Z, put a v regs, pc + 1)
+  | INop => (1%Z, regs, pc + 1)
   end.
 
 Fixpoint eval_instr_log (instrs : list Instr) fuel regs pc :=
@@ -118,3 +124,28 @@ Definition get_compiled_result (s: Stmt) (result_var : Var) :=
   end.
 
 Compute get_compiled_result (eg_double_stmt 7) var_a.
+
+Fixpoint stmt_list_to_stmt l :=
+  match l with
+  | [] => SNop
+  | hd :: tl => SSeq hd (stmt_list_to_stmt tl)
+  end.
+
+(* if (a == 5) then b = 500 else b = 100 *)
+
+Definition eg_cond_stmt a := stmt_list_to_stmt
+  [
+    (SLit var_a a);
+    (SLit var_tmp (Z.neg 5));
+    (SAdd var_a var_a var_tmp);
+    (SIf var_a 
+      (SLit var_b 100) 
+      (SLit var_b 500)
+    )
+  ].
+
+Lemma eg_cond_5_correct : get_compiled_result (eg_cond_stmt 5%Z) var_b = Some 500%Z.
+Proof. reflexivity. Qed.
+
+Lemma eg_cond_neg12_correct : get_compiled_result (eg_cond_stmt (Z.neg 12)) var_b = Some 100%Z.
+Proof. reflexivity. Qed.
