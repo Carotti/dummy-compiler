@@ -1,4 +1,5 @@
 Require Import Coq.ZArith.BinInt.
+Require Import Coq.ZArith.Int.
 Require Import Coq.Lists.List. Import ListNotations.
 Require Import PeanoNat.
 
@@ -32,21 +33,21 @@ Inductive Stmt :=
   | SNop
   .
 
-Definition inc_eval_log (res : option (Z * Regs)) (inc : Z) :=
+Definition inc_eval_log (inc : Z) (res : option (Z * Regs)) :=
   bind res (fun x => (Z.add (fst x) inc, snd x)).
 
-Fixpoint eval_stmt_log (s : Stmt) (fuel : nat) (r : Regs) :=
+Fixpoint eval_stmt_log (fuel : nat) (s : Stmt) (r : Regs) :=
   match fuel with
   | O => None
   | S f => match s with
            | SAdd a b c => Some (1%Z, put a ((get b r) + (get c r)) r)
            | SIf cond trueEval falseEval => if (Z.eqb (get cond r) 0%Z) then
-                                              inc_eval_log (eval_stmt_log falseEval f r) 1%Z
+                                              inc_eval_log 1%Z (eval_stmt_log f falseEval r)
                                             else
-                                              inc_eval_log (eval_stmt_log trueEval f r) 1%Z
-           | SSeq s1 s2 => match eval_stmt_log s1 f r with
+                                              inc_eval_log 1%Z (eval_stmt_log f trueEval r)
+           | SSeq s1 s2 => match eval_stmt_log f s1 r with
                            | None => None
-                           | Some (count, r') => inc_eval_log (eval_stmt_log s2 f r') count
+                           | Some (count, r') => inc_eval_log count (eval_stmt_log f s2 r')
                            end
            | SLit a v => Some (1%Z, put a v r)
            | SNop => Some (1%Z, r)
@@ -61,7 +62,7 @@ Definition var_tmp := 3.
 Definition eg_double_stmt n :=
   SSeq (SLit var_a n) (SAdd var_a var_a var_a).
 
-Definition eg_double_res n := (eval_stmt_log (eg_double_stmt n) 5 emptyRegs).
+Definition eg_double_res n := (eval_stmt_log 5 (eg_double_stmt n) emptyRegs).
 
 Definition eg_double_instructions n := bind (eg_double_res n) fst.
 Definition eg_double_regs n := bind (eg_double_res n) snd.
@@ -94,7 +95,7 @@ Fixpoint compile_stmt (s : Stmt) :=
   | SNop => [INop]
   end.
 
-Fixpoint eval_instr_log_single i regs pc :=
+Fixpoint eval_instr_log_single i pc regs :=
   match i with
   | IAdd a b c => (1%Z, put a ((get b regs) + (get c regs)) regs, pc + 1)
   | IJump pc' => (1%Z, regs, pc + pc' + 1)
@@ -103,27 +104,24 @@ Fixpoint eval_instr_log_single i regs pc :=
   | INop => (1%Z, regs, pc + 1)
   end.
 
-Fixpoint eval_instr_log (instrs : list Instr) fuel regs pc :=
-  match fuel with
-  | 0 => None
-  | S f => match nth_error instrs pc with
-           | None => Some (0%Z, regs, pc) (* Execution has completed *)
-           | Some i => match (eval_instr_log_single i regs pc) with
-                       | (count', regs', pc') => match (eval_instr_log instrs f regs' pc') with
-                                               | None => None
-                                               | Some (count'', regs'', pc'') => Some (Z.add count' count'', regs'', pc'')
-                                               end
+Fixpoint eval_instr_log fuel (instrs : list Instr) regs pc :=
+  match nth_error instrs pc with
+  | None => Some (0%Z, regs, pc) (* Execution has completed *)
+  | Some i => match fuel with
+              | 0 => None
+              | S f => let '(count', regs', pc') := (eval_instr_log_single i pc regs) in
+                       match (eval_instr_log f instrs regs' pc') with
+                       | None => None
+                       | Some (count'', regs'', pc'') => Some (Z.add count' count'', regs'', pc'')
                        end
-           end 
+               end
   end.
 
 Definition get_compiled_result (s: Stmt) (result_var : Var) :=
-  match eval_instr_log (compile_stmt s) 100 emptyRegs 0 with
+  match eval_instr_log 100 (compile_stmt s)emptyRegs 0 with
   | None => None
   | Some (count, regs, pc) => Some (get result_var regs)
   end.
-
-Compute get_compiled_result (eg_double_stmt 7) var_a.
 
 Fixpoint stmt_list_to_stmt l :=
   match l with
@@ -149,3 +147,66 @@ Proof. reflexivity. Qed.
 
 Lemma eg_cond_neg12_correct : get_compiled_result (eg_cond_stmt (Z.neg 12)) var_b = Some 100%Z.
 Proof. reflexivity. Qed.
+
+Lemma inc_log : forall n fuel s ir countH Hfr p,
+  eval_stmt_log fuel s ir = Some p ->
+  inc_eval_log n (Some p) = Some (countH, Hfr) ->
+  countH = Z.add (fst p) n.
+Proof.
+intros.
+destruct fuel.
+- discriminate.
+- inversion H0. reflexivity.
+Qed.
+
+Lemma beq_equivalence : forall instrs pc var pc' regs fuel count fregs1 fpc1 fregs2 fpc2 countRest,
+  nth_error instrs pc = Some (IBeqz var pc') ->
+  get var regs = 0%Z ->
+  eval_instr_log (S fuel) instrs regs pc = Some (count, fregs1, fpc1) ->
+  eval_instr_log fuel instrs regs (pc + pc' + 1) = Some(countRest, fregs2, fpc2) ->
+  count = (countRest + 1)%Z.
+Proof.
+intros.
+simpl in H1. rewrite H in H1. unfold eval_instr_log_single in H1. rewrite H0 in H1. simpl in H1.
+rewrite H2 in H1. inversion H1.
+destruct countRest.
+- reflexivity.
+- destruct p.
+  + simpl. reflexivity.
+  + simpl. reflexivity.
+  + simpl. reflexivity.
+- simpl. reflexivity.
+Qed.
+
+Lemma bounded_instrs : forall (s : Stmt) (fuel : nat) (ir : Regs) countL countH Hfr Lfr pcf,
+  eval_stmt_log fuel s ir = Some (countH, Hfr) ->
+  eval_instr_log fuel (compile_stmt s) ir 0 = Some (countL, Lfr, pcf) ->
+  Z.ltb countL (Z.mul countH 3%Z) = true.
+Proof.
+intros.
+generalize dependent s.
+generalize dependent countL.
+generalize dependent countH.
+induction fuel.
+- discriminate.
+- destruct s.
+  + (* s = SAdd a b c *) 
+    intros. inversion H.
+    destruct fuel.
+    * inversion H0. reflexivity. 
+    * inversion H0. reflexivity.
+  + (* s = SIf cond trueEval falseEval *)
+    admit.
+  + (* s = SSeq s1 s2 *)
+    admit.
+  + (* s = SLit a v *)
+    intros. inversion H.
+    destruct fuel.
+    * inversion H0. reflexivity.
+    * inversion H0. reflexivity.
+  + (* s = SNop *)
+    intros. inversion H.
+    destruct fuel.
+    * inversion H0. reflexivity.
+    * inversion H0. reflexivity.
+Admitted.
