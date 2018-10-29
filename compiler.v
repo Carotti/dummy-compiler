@@ -1,7 +1,8 @@
-Require Import Coq.ZArith.BinInt.
 Require Import Coq.ZArith.Int.
+Require Import Coq.ZArith.ZArith.
 Require Import Coq.Lists.List. Import ListNotations.
 Require Import PeanoNat.
+
 
 (* Option monad utilities *)
 Definition bind{A B: Type} (x : option A) (f : A -> B) :=
@@ -33,26 +34,30 @@ Inductive Stmt :=
   | SNop
   .
 
+Open Scope Z_scope.
+
 Definition inc_eval_log (inc : Z) (res : option (Z * Regs)) :=
-  bind res (fun x => (Z.add (fst x) inc, snd x)).
+  bind res (fun x => ((fst x) + inc, snd x)).
 
 Fixpoint eval_stmt_log (fuel : nat) (s : Stmt) (r : Regs) :=
   match fuel with
   | O => None
   | S f => match s with
-           | SAdd a b c => Some (1%Z, put a ((get b r) + (get c r)) r)
+           | SAdd a b c => Some (1, put a ((get b r) + (get c r)) r)
            | SIf cond trueEval falseEval => if (Z.eqb (get cond r) 0%Z) then
-                                              inc_eval_log 1%Z (eval_stmt_log f falseEval r)
+                                              inc_eval_log 1 (eval_stmt_log f falseEval r)
                                             else
-                                              inc_eval_log 1%Z (eval_stmt_log f trueEval r)
+                                              inc_eval_log 1 (eval_stmt_log f trueEval r)
            | SSeq s1 s2 => match eval_stmt_log f s1 r with
                            | None => None
                            | Some (count, r') => inc_eval_log count (eval_stmt_log f s2 r')
                            end
-           | SLit a v => Some (1%Z, put a v r)
-           | SNop => Some (1%Z, r)
+           | SLit a v => Some (1, put a v r)
+           | SNop => Some (1, r)
            end
   end.
+
+Close Scope Z_scope.
 
 Definition var_a := 1.
 Definition var_b := 2.
@@ -178,10 +183,12 @@ destruct countRest.
 - simpl. reflexivity.
 Qed.
 
+Open Scope Z_scope.
+
 Lemma bounded_instrs : forall (s : Stmt) (fuel : nat) (ir : Regs) countL countH Hfr Lfr pcf,
   eval_stmt_log fuel s ir = Some (countH, Hfr) ->
   eval_instr_log fuel (compile_stmt s) ir 0 = Some (countL, Lfr, pcf) ->
-  Z.ltb countL (Z.mul countH 3%Z) = true.
+  countL < 3 * countH.
 Proof.
 intros.
 generalize dependent s.
