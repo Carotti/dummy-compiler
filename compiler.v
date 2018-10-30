@@ -191,14 +191,6 @@ destruct fuel.
 - inversion H0. reflexivity.
 Qed.
 
-Lemma n_sub_n : forall (n : nat),
-  n - n = O.
-Proof.
-induction n.
-- reflexivity.
-- apply IHn.
-Qed.
-
 Lemma fetch_insts : forall (instsBefore instsAfter : list Instr) x rest n ,
   n = (length instsBefore) ->
   nth_error (instsBefore ++ (x :: rest) ++ instsAfter) n = Some x.
@@ -207,7 +199,7 @@ intros.
 rewrite app_assoc.
 rewrite nth_error_app1.
 - rewrite nth_error_app2.
-  + simpl. rewrite H. rewrite n_sub_n. reflexivity.
+  + simpl. rewrite H. rewrite Nat.sub_diag. reflexivity.
   + rewrite H. reflexivity.
 - induction instsBefore.
   + simpl. rewrite H. simpl. omega.
