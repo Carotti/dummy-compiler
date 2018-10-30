@@ -2,7 +2,7 @@ Require Import Coq.ZArith.Int.
 Require Import Coq.ZArith.ZArith.
 Require Import Coq.Lists.List. Import ListNotations.
 Require Import PeanoNat.
-
+Require Import Coq.Arith.Arith.
 
 (* Option monad utilities *)
 Definition bind{A B: Type} (x : option A) (f : A -> B) :=
@@ -191,6 +191,38 @@ destruct fuel.
 - inversion H0. reflexivity.
 Qed.
 
+Lemma n_sub_n : forall (n : nat),
+  n - n = O.
+Proof.
+induction n.
+- reflexivity.
+- apply IHn.
+Qed.
+
+Lemma fetch_insts : forall (instsBefore instsAfter : list Instr) x rest n ,
+  n = (length instsBefore) ->
+  nth_error (instsBefore ++ (x :: rest) ++ instsAfter) n = Some x.
+Proof.
+intros.
+rewrite app_assoc.
+rewrite nth_error_app1.
+- rewrite nth_error_app2.
+  + simpl. rewrite H. rewrite n_sub_n. reflexivity.
+  + rewrite H. reflexivity.
+- induction instsBefore.
+  + simpl. rewrite H. simpl. omega.
+  + simpl. rewrite app_length. rewrite H. simpl. omega.
+Qed.
+
+Lemma next_inst : forall (before after: list Instr) a b,
+  before ++ a :: b :: after = (before ++ [a]) ++ [b] ++ after.
+Proof.
+intros.
+induction before.
+- reflexivity.
+- simpl. f_equal. apply IHbefore.
+Qed.
+
 Open Scope Z_scope.
 
 Lemma bounded_instrs :
@@ -213,23 +245,29 @@ induction fuelH.
     destruct fuelL.
     * discriminate.
     * rewrite H1 in H0. rewrite H4 in H0. rewrite H5 in H0. simpl in H0. 
-    destruct fuelL. (* Exit instruction *)
-      ** discriminate.
-      ** simpl in H0. unfold add_regs in H0. simpl in H0. rewrite H5 in H0.
-         compute in H0. inversion H0. rewrite <- H6 in H2. simpl in H2.
-         rewrite <- H2. reflexivity.
+      rewrite <- H3 in H0. unfold compile_stmt in H0. unfold compile_stmt_rec in H0.
+      simpl ([_] ++ [_]) in H0. pose proof fetch_insts as Hfetch1.
+      specialize (Hfetch1 instsBefore instsAfter (IAdd a b c) [IExit] (length instsBefore)).
+      rewrite Hfetch1 in H0.
+      destruct fuelL. (* Exit instruction *)
+        ** discriminate.
+        ** simpl in H0. rewrite next_inst in H0.
+           pose proof fetch_insts as Hfetch2.
+           specialize (Hfetch2 (instsBefore ++ [IAdd a b c]) instsAfter IExit []).
+           specialize (Hfetch2 (Nat.add (length instsBefore) 1)).
+           rewrite app_length in Hfetch2.
+           rewrite Hfetch2 in H0.
+           *** unfold add_regs in H0. simpl in H0. rewrite H8 in H0.
+               compute in H0. inversion H0. rewrite <- H9 in H2. simpl in H2.
+               rewrite <- H2. reflexivity.
+           *** reflexivity.
+        ** reflexivity.
   + (* s = SIf cond trueEval falseEval *)
     admit.
   + (* s = SSeq s1 s2 *)
     admit.
   + (* s = SLit a v *)
-    intros. inversion H.
-    destruct fuel.
-    * inversion H0. reflexivity.
-    * inversion H0. reflexivity.
+    admit.
   + (* s = SNop *)
-    intros. inversion H.
-    destruct fuel.
-    * inversion H0. reflexivity.
-    * inversion H0. reflexivity.
+    admit.
 Admitted.
