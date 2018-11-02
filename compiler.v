@@ -207,17 +207,17 @@ induction fuelH.
 - discriminate.
 - destruct s.
   + (* s = SAdd a b c *) 
-    intros. inversion H. simpl.
-    subst insts. simpl in H0.
-    rewrite app_length in H2. simpl in H2.
-    subst fpc.
+    intros ir countH Hfr mh instsBefore instsAfter insts fpc HHi HLo HCompile HExit.
+    inversion HHi. simpl.
+    subst insts. simpl in HLo.
+    rewrite app_length in HExit. simpl in HExit. subst fpc.
     destruct fuelL. discriminate.
-    simpl in H0. rewrite minus_plus in H0.
+    simpl in HLo. rewrite minus_plus in HLo.
     pose fetch_inst as Hfetch.
-    specialize (Hfetch instsBefore instsAfter (IAdd a b c)). rewrite Hfetch in H0.
+    specialize (Hfetch instsBefore instsAfter (IAdd a b c)). rewrite Hfetch in HLo.
     destruct fuelL. discriminate.
-    simpl in H0. rewrite Nat.sub_diag with (n := (length instsBefore + 1)%nat) in H0.
-    inversion H0. reflexivity.
+    simpl in HLo. rewrite Nat.sub_diag with (n := (length instsBefore + _)%nat) in HLo.
+    inversion HLo. reflexivity.
   + (* s = SIf cond trueEval falseEval *)
     admit.
   + (* s = SSeq s1 s2 *)
