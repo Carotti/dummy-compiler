@@ -85,33 +85,19 @@ Inductive Instr :=
   | IBeqz (a : Var) (pc : nat)
   | IImm (a : Var) (v : Z)
   | INop
-  | IExit (* Terminate execution *)
   .
 
-Fixpoint compile_stmt_rec (s : Stmt) :=
+Fixpoint compile_stmt (s : Stmt) :=
   match s with
   | SAdd a b c => [IAdd a b c]
-  | SIf c t f => match (compile_stmt_rec t) with
-                 | t' => match (compile_stmt_rec f) with
+  | SIf c t f => match (compile_stmt t) with
+                 | t' => match (compile_stmt f) with
                          | f' => [IBeqz c (1 + (length t'))] ++ t' ++ [IJump (length f')] ++ f'
                          end
                  end
-  | SSeq s1 s2 => (compile_stmt_rec s1) ++ (compile_stmt_rec s2)
+  | SSeq s1 s2 => (compile_stmt s1) ++ (compile_stmt s2)
   | SLit a v => [IImm a v]
   | SNop => [INop]
-  end.
-
-(* Append an exit to the instructions *)
-Definition compile_stmt (s : Stmt) := compile_stmt_rec s ++ [IExit].
-
-Fixpoint eval_instr_log_single i pc regs :=
-  match i with
-  | IAdd a b c => (1%Z, put a ((get b regs) + (get c regs)) regs, pc + 1)
-  | IJump pc' => (1%Z, regs, pc + pc' + 1)
-  | IBeqz a pc' => (1%Z, regs, if (Z.eqb (get a regs) 0%Z) then pc + pc' + 1 else pc + 1)
-  | IImm a v => (1%Z, put a v regs, pc + 1)
-  | INop => (1%Z, regs, pc + 1)
-  | IExit => (0%Z, regs, pc) (* Loop til we run out of fuel *)
   end.
 
 Record InstrMachineLog := mkInstrMachineLog {
@@ -133,27 +119,31 @@ Definition add_regs a b c m := with_Iregs (put a ((get b m.(Iregs)) + (get c m.(
 Definition load_imm a v m := with_Iregs (put a v m.(Iregs)) m.
 
 
-Fixpoint eval_instr_log fuel (m : InstrMachineLog) (instrs : list Instr) : option InstrMachineLog :=
+Fixpoint eval_instr_log fuel (m : InstrMachineLog) (instrs : list Instr) pcf : option InstrMachineLog :=
   match fuel with
   | O => None
-  | S fuel' => match nth_error instrs m.(Ipc) with
-              | None => None (* Should never happen *)
-              | Some i => match i with
-                          | IAdd a b c => eval_instr_log fuel' (inc_count 1 (inc_pc 1 (add_regs a b c (m)))) instrs
-                          | IJump pc' => eval_instr_log fuel' (inc_count 1 (inc_pc (pc' + 1) m)) instrs
-                          | IBeqz a pc' => eval_instr_log fuel' (inc_count 1 (inc_pc (if (Z.eqb (get a m.(Iregs)) 0%Z) then pc' + 1 else 1) m)) instrs
-                          | IImm a v => eval_instr_log fuel' (inc_count 1 (inc_pc 1 (load_imm a v m))) instrs
-                          | INop => eval_instr_log fuel' (inc_count 1 (inc_pc 1 m)) instrs
-                          | IExit => Some m
-                          end
-              end
+  | S fuel' => match pcf - m.(Ipc) with
+                | 0 => Some m
+                | _ => match nth_error instrs m.(Ipc) with
+                       | None => None (* Should never happen *)
+                       | Some i => eval_instr_log fuel' (inc_count 1 (
+                                    match i with
+                                    | IAdd a b c => inc_pc 1 (add_regs a b c (m))
+                                    | IJump pc' => inc_pc (pc' + 1) m
+                                    | IBeqz a pc' => inc_pc (if (Z.eqb (get a m.(Iregs)) 0%Z) then pc' + 1 else 1) m
+                                    | IImm a v => inc_pc 1 (load_imm a v m)
+                                    | INop => inc_pc 1 m
+                                    end)) instrs pcf
+                         end
+                end
   end.
 
 Definition get_compiled_result (s: Stmt) (result_var : Var) :=
-  match eval_instr_log 100 emptyMachineLog (compile_stmt s) with
-  | None => None
-  | Some m => Some (get result_var m.(Iregs))
-  end.
+  let c := compile_stmt s in
+    match eval_instr_log 100 emptyMachineLog c ((length c) - 1) with
+    | None => None
+    | Some m => Some (get result_var m.(Iregs))
+    end.
 
 Fixpoint stmt_list_to_stmt l :=
   match l with
@@ -174,6 +164,8 @@ Definition eg_cond_stmt a := stmt_list_to_stmt
     )
   ].
 
+Compute (compile_stmt (eg_cond_stmt 5%Z)).
+
 Lemma eg_cond_5_correct : get_compiled_result (eg_cond_stmt 5%Z) var_b = Some 500%Z.
 Proof. reflexivity. Qed.
 
@@ -191,69 +183,41 @@ destruct fuel.
 - inversion H0. reflexivity.
 Qed.
 
-Lemma fetch_insts : forall (instsBefore instsAfter : list Instr) x rest n ,
-  n = (length instsBefore) ->
-  nth_error (instsBefore ++ (x :: rest) ++ instsAfter) n = Some x.
+Lemma fetch_inst : forall (instsBefore instsAfter : list Instr) x,
+  nth_error (instsBefore ++ x :: instsAfter) (length instsBefore) = Some x.
 Proof.
-intros.
-rewrite app_assoc.
-rewrite nth_error_app1.
-- rewrite nth_error_app2.
-  + simpl. rewrite H. rewrite Nat.sub_diag. reflexivity.
-  + rewrite H. reflexivity.
-- induction instsBefore.
-  + simpl. rewrite H. simpl. omega.
-  + simpl. rewrite app_length. rewrite H. simpl. omega.
+induction instsBefore.
+- reflexivity.
+- simpl. apply IHinstsBefore. 
 Qed.
 
-Lemma next_inst : forall (before after: list Instr) a b,
-  before ++ a :: b :: after = (before ++ [a]) ++ [b] ++ after.
-Proof.
-intros.
-induction before.
-- reflexivity.
-- simpl. f_equal. apply IHbefore.
-Qed.
+Search _ "-" _.
 
 Open Scope Z_scope.
 
 Lemma bounded_instrs :
-forall (fuelL fuelH : nat) (s : Stmt) (ir : Regs) ipc
-countL countH Hfr mi mf allInsts instsBefore instsAfter insts,
+forall (fuelL fuelH : nat) (s : Stmt) (ir : Regs) countH Hfr mf instsBefore instsAfter insts fpc,
   eval_stmt_log fuelH s ir = Some (countH, Hfr) ->
-  eval_instr_log fuelL mi allInsts = Some mf ->
-  mi = mkInstrMachineLog ir ipc 0 ->
-  mf.(Icount) = countL ->
+  eval_instr_log fuelL (mkInstrMachineLog ir (length instsBefore) 0) (instsBefore ++ insts ++ instsAfter) fpc = Some mf ->
   compile_stmt s = insts ->
-  allInsts = instsBefore ++ insts ++ instsAfter ->
-  ipc = length instsBefore ->
-  countL < 3 * countH.
+  fpc = (length (instsBefore ++ insts))%nat ->
+  mf.(Icount) < 3 * countH.
 Proof.
 induction fuelH.
 - discriminate.
 - destruct s.
   + (* s = SAdd a b c *) 
-    intros. inversion H.
-    destruct fuelL.
-    * discriminate.
-    * rewrite H1 in H0. rewrite H4 in H0. rewrite H5 in H0. simpl in H0. 
-      rewrite <- H3 in H0. unfold compile_stmt in H0. unfold compile_stmt_rec in H0.
-      simpl ([_] ++ [_]) in H0. pose proof fetch_insts as Hfetch1.
-      specialize (Hfetch1 instsBefore instsAfter (IAdd a b c) [IExit] (length instsBefore)).
-      rewrite Hfetch1 in H0.
-      destruct fuelL. (* Exit instruction *)
-        ** discriminate.
-        ** simpl in H0. rewrite next_inst in H0.
-           pose proof fetch_insts as Hfetch2.
-           specialize (Hfetch2 (instsBefore ++ [IAdd a b c]) instsAfter IExit []).
-           specialize (Hfetch2 (Nat.add (length instsBefore) 1)).
-           rewrite app_length in Hfetch2.
-           rewrite Hfetch2 in H0.
-           *** unfold add_regs in H0. simpl in H0. rewrite H8 in H0.
-               compute in H0. inversion H0. rewrite <- H9 in H2. simpl in H2.
-               rewrite <- H2. reflexivity.
-           *** reflexivity.
-        ** reflexivity.
+    intros. inversion H. simpl.
+    subst insts. simpl in H0.
+    rewrite app_length in H2. simpl in H2.
+    subst fpc.
+    destruct fuelL. discriminate.
+    simpl in H0. rewrite minus_plus in H0.
+    pose fetch_inst as Hfetch.
+    specialize (Hfetch instsBefore instsAfter (IAdd a b c)). rewrite Hfetch in H0.
+    destruct fuelL. discriminate.
+    simpl in H0. rewrite Nat.sub_diag with (n := (length instsBefore + 1)%nat) in H0.
+    inversion H0. reflexivity.
   + (* s = SIf cond trueEval falseEval *)
     admit.
   + (* s = SSeq s1 s2 *)
