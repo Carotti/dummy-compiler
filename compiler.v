@@ -172,15 +172,14 @@ Proof. reflexivity. Qed.
 Lemma eg_cond_neg12_correct : get_compiled_result (eg_cond_stmt (Z.neg 12)) var_b = Some 100%Z.
 Proof. reflexivity. Qed.
 
-Lemma inc_log : forall n fuel s ir countH Hfr p,
-  eval_stmt_log fuel s ir = Some p ->
-  inc_eval_log n (Some p) = Some (countH, Hfr) ->
-  countH = Z.add (fst p) n.
+Lemma inc_log : forall n x countH Hfr,
+  inc_eval_log n x = Some (countH, Hfr) ->
+  x = Some ((countH - n)%Z, Hfr).
 Proof.
-intros.
-destruct fuel.
+intros. unfold inc_eval_log in H.
+destruct x.
+- inversion H. f_equal. rewrite Z.add_simpl_r. apply surjective_pairing.
 - discriminate.
-- inversion H0. reflexivity.
 Qed.
 
 Lemma fetch_inst : forall (instsBefore instsAfter : list Instr) x,
@@ -188,38 +187,77 @@ Lemma fetch_inst : forall (instsBefore instsAfter : list Instr) x,
 Proof.
 induction instsBefore.
 - reflexivity.
-- simpl. apply IHinstsBefore. 
+- auto.
 Qed.
-
-Search _ "-" _.
 
 Open Scope Z_scope.
 
 Lemma bounded_instrs :
-forall (fuelL fuelH : nat) (s : Stmt) (ir : Regs) countH Hfr mf instsBefore instsAfter insts fpc,
+forall (fuelH fuelL: nat) (s : Stmt) countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf,
   eval_stmt_log fuelH s ir = Some (countH, Hfr) ->
-  eval_instr_log fuelL (mkInstrMachineLog ir (length instsBefore) 0) (instsBefore ++ insts ++ instsAfter) fpc = Some mf ->
-  compile_stmt s = insts ->
+  eval_instr_log fuelL mi (instsBefore ++ insts ++ instsAfter) fpc = Some mf ->
+  mi = (mkInstrMachineLog ir (length instsBefore) startCountL) ->
+  insts = compile_stmt s ->
   fpc = (length (instsBefore ++ insts))%nat ->
-  mf.(Icount) < 3 * countH.
+  (mf.(Icount) - startCountL) < 3 * countH.
 Proof.
 induction fuelH.
 - discriminate.
 - destruct s.
   + (* s = SAdd a b c *) 
-    intros ir countH Hfr mh instsBefore instsAfter insts fpc HHi HLo HCompile HExit.
+    intros countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf HHi HLo HMi HCompile HExit.
     inversion HHi. simpl.
     subst insts. simpl in HLo.
-    rewrite app_length in HExit. simpl in HExit. subst fpc.
+    rewrite app_length in HExit. simpl in HExit. subst fpc. subst mi.
     destruct fuelL. discriminate.
     simpl in HLo. rewrite minus_plus in HLo.
     pose fetch_inst as Hfetch.
     specialize (Hfetch instsBefore instsAfter (IAdd a b c)). rewrite Hfetch in HLo.
     destruct fuelL. discriminate.
     simpl in HLo. rewrite Nat.sub_diag with (n := (length instsBefore + _)%nat) in HLo.
-    inversion HLo. reflexivity.
+    inversion HLo. simpl. omega.
   + (* s = SIf cond trueEval falseEval *)
-    admit.
+    intros countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf HHi HLo HMi HCompile HExit.
+    simpl in HHi. destruct (get cond ir =? 0) eqn:HCond.
+    simpl in HCompile.
+    * (* False condition (s2) *)
+      destruct fuelH. discriminate.
+      pose inc_log as HInc.
+      specialize (HInc 1 (eval_stmt_log (S fuelH) s2 ir) countH Hfr).
+      rewrite HHi in HInc. assert (HHi' : eval_stmt_log (S fuelH) s2 ir = Some (countH - 1, Hfr)).
+      apply HInc. f_equal.
+      destruct fuelL. discriminate.
+      simpl in HLo. rewrite HExit in HLo. rewrite HMi in HLo. simpl in HLo. rewrite app_length in HLo. rewrite minus_plus in HLo.
+      rewrite HCompile in HLo. simpl in HLo.
+      pose fetch_inst as Hfetch.
+      specialize (
+        Hfetch
+        instsBefore
+        ((compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) ++ instsAfter)
+        (IBeqz cond (S (length (compile_stmt s1))))).
+      rewrite Hfetch in HLo.
+      rewrite HCond in HLo.
+      destruct fuelL. discriminate.
+      specialize (IHfuelH (S fuelL) s2 (countH - 1) Hfr).
+      specialize (
+        IHfuelH
+        ((instsBefore ++ [IBeqz cond (1 + (length (compile_stmt s1)))]) ++ (compile_stmt s1) ++ [IJump (length (compile_stmt s2))])
+        instsAfter (compile_stmt s2) (2 + (length (compile_stmt s1)) + (length (compile_stmt s2)) + mi.(Ipc))%nat
+        (inc_count 1 (inc_pc (S (length (compile_stmt s1)) + 1) {| Iregs := ir; Ipc := length instsBefore; Icount := startCountL |}))
+        (startCountL + 1) ir).
+      assert (HIneq: Icount mf - (startCountL + 1) < 3 * (countH - 1) -> Icount mf - startCountL < 3 * countH). omega.
+      apply HIneq.
+      apply IHfuelH.
+      ** rewrite HHi'. reflexivity.
+      ** rewrite <- HLo. f_equal.
+         *** rewrite <- app_assoc. rewrite <- app_assoc. f_equal. simpl. rewrite <- app_assoc. f_equal. simpl. rewrite <- app_assoc. reflexivity.
+         *** rewrite HMi. simpl. rewrite app_length. simpl. omega.
+      ** unfold inc_pc. unfold with_Ipc. unfold inc_count. unfold with_Icount. simpl. f_equal.
+         rewrite app_length. rewrite app_length. rewrite app_length. simpl. omega.
+      ** reflexivity.
+      ** rewrite HMi. rewrite app_length. rewrite app_length. rewrite app_length. simpl. rewrite app_length.
+         simpl. omega.
+    * (* True condition (s1) *)
   + (* s = SSeq s1 s2 *)
     admit.
   + (* s = SLit a v *)
