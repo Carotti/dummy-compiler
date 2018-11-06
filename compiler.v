@@ -219,22 +219,22 @@ induction fuelH.
     inversion HLo. omega.
   + (* s = SIf cond trueEval falseEval *)
     intros countH Hfr Lfr instsBefore instsAfter startCountL endCountL ir HHi HLo.
-    simpl in HHi. destruct (get cond ir =? 0) eqn:HCond.
+    simpl in HHi. 
+    destruct fuelL. discriminate.
+    simpl in HLo.
+    replace (_ =? _)%nat with false in HLo.
+    2 : { symmetry. rewrite Nat.eqb_neq. rewrite app_length. simpl. omega. }
+    replace (nth_error _ _) with (Some (IBeqz cond (S (length (compile_stmt s1))))) in HLo.
+    2 : { rewrite (
+              fetch_inst
+              instsBefore
+              ((compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) ++ instsAfter)
+              (IBeqz cond (S (length (compile_stmt s1))))). f_equal. }
+    destruct fuelL. discriminate.
+    destruct fuelH. { destruct (get cond ir =? 0). discriminate. discriminate. } 
+    destruct (get cond ir =? 0) eqn:HCond.
     * (* False condition (s2) *)
-      destruct fuelH. discriminate.
       apply (inc_log 1 (eval_stmt_log (S fuelH) s2 ir) countH Hfr) in HHi.
-      destruct fuelL. discriminate.
-      simpl in HLo.
-      replace (_ =? _)%nat with false in HLo.
-      2 : { symmetry. rewrite Nat.eqb_neq. rewrite app_length. simpl. omega. }
-      replace (nth_error _ _) with (Some (IBeqz cond (S (length (compile_stmt s1))))) in HLo.
-      2 : { rewrite (
-                fetch_inst
-                instsBefore
-                ((compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) ++ instsAfter)
-                (IBeqz cond (S (length (compile_stmt s1))))). f_equal. }
-      destruct fuelL. discriminate.
-      rewrite HCond in HLo.
       specialize (
         IHfuelH (S fuelL) s2 (countH - 1) Hfr Lfr
         ((instsBefore ++ [IBeqz cond (1 + (length (compile_stmt s1)))]) ++ (compile_stmt s1) ++ [IJump (length (compile_stmt s2))])
@@ -258,6 +258,8 @@ induction fuelH.
              unfold Iregs. unfold Ipc. unfold Icount. f_equal.
              repeat rewrite app_length. reflexivity.
     * (* True condition (s1) *)
+      apply (inc_log 1 (eval_stmt_log (S fuelH) s1 ir) countH Hfr) in HHi.
+      admit.
   + (* s = SSeq s1 s2 *)
     admit.
   + (* s = SLit a v *)
