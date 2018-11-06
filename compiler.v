@@ -122,20 +122,18 @@ Definition load_imm a v m := with_Iregs (put a v m.(Iregs)) m.
 Fixpoint eval_instr_log fuel (m : InstrMachineLog) (instrs : list Instr) pcf : option InstrMachineLog :=
   match fuel with
   | O => None
-  | S fuel' => match pcf - m.(Ipc) with
-                | 0 => Some m
-                | _ => match nth_error instrs m.(Ipc) with
-                       | None => None (* Should never happen *)
-                       | Some i => eval_instr_log fuel' (inc_count 1 (
-                                    match i with
-                                    | IAdd a b c => inc_pc 1 (add_regs a b c (m))
-                                    | IJump pc' => inc_pc (pc' + 1) m
-                                    | IBeqz a pc' => inc_pc (if (Z.eqb (get a m.(Iregs)) 0%Z) then pc' + 1 else 1) m
-                                    | IImm a v => inc_pc 1 (load_imm a v m)
-                                    | INop => inc_pc 1 m
-                                    end)) instrs pcf
-                         end
-                end
+  | S fuel' => if pcf =? m.(Ipc) then Some m else
+                 match nth_error instrs m.(Ipc) with
+                 | None => None (* Should never happen *)
+                 | Some i => eval_instr_log fuel' (inc_count 1 (
+                               match i with
+                               | IAdd a b c => inc_pc 1 (add_regs a b c (m))
+                               | IJump pc' => inc_pc (pc' + 1) m
+                               | IBeqz a pc' => inc_pc (if (Z.eqb (get a m.(Iregs)) 0%Z) then pc' + 1 else 1) m
+                               | IImm a v => inc_pc 1 (load_imm a v m)
+                               |  INop => inc_pc 1 m
+                               end)) instrs pcf
+                 end
   end.
 
 Definition get_compiled_result (s: Stmt) (result_var : Var) :=
@@ -193,70 +191,72 @@ Qed.
 Open Scope Z_scope.
 
 Lemma bounded_instrs :
-forall (fuelH fuelL: nat) (s : Stmt) countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf,
+forall (fuelH fuelL: nat) (s : Stmt) countH Hfr Lfr instsBefore instsAfter startCountL endCountL ir,
   eval_stmt_log fuelH s ir = Some (countH, Hfr) ->
-  eval_instr_log fuelL mi (instsBefore ++ insts ++ instsAfter) fpc = Some mf ->
-  mi = (mkInstrMachineLog ir (length instsBefore) startCountL) ->
-  insts = compile_stmt s ->
-  fpc = (length (instsBefore ++ insts))%nat ->
-  (mf.(Icount) - startCountL) < 3 * countH.
+  eval_instr_log fuelL
+    (mkInstrMachineLog ir (length instsBefore) startCountL)
+    (instsBefore ++ compile_stmt s ++ instsAfter)
+    (length (instsBefore ++ compile_stmt s))%nat
+    = Some (mkInstrMachineLog Lfr (length (instsBefore ++ compile_stmt s))%nat endCountL) ->
+  (endCountL - startCountL) < 3 * countH.
 Proof.
 induction fuelH.
 - discriminate.
 - destruct s.
   + (* s = SAdd a b c *) 
-    intros countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf HHi HLo HMi HCompile HExit.
-    inversion HHi. simpl.
-    subst insts. simpl in HLo.
-    rewrite app_length in HExit. simpl in HExit. subst fpc. subst mi.
+    intros countH Hfr Lfr instsBefore instsAfter startCountL endCountL ir HHi HLo.
+    inversion HHi.
     destruct fuelL. discriminate.
-    simpl in HLo. rewrite minus_plus in HLo.
-    pose fetch_inst as Hfetch.
-    specialize (Hfetch instsBefore instsAfter (IAdd a b c)). rewrite Hfetch in HLo.
+    rewrite app_length in HLo. simpl in HLo.
+    replace (_ + 1 =? _)%nat with false in HLo.
+    2 : { symmetry. rewrite Nat.eqb_neq. omega. }
+    replace (nth_error (_) (_)) with (Some (IAdd a b c)) in HLo.
+    2 : { symmetry. apply fetch_inst. }
     destruct fuelL. discriminate.
-    simpl in HLo. rewrite Nat.sub_diag with (n := (length instsBefore + _)%nat) in HLo.
-    inversion HLo. simpl. omega.
+    simpl in HLo.
+    replace (_ =? _)%nat with true in HLo.
+    2 : { symmetry. rewrite Nat.eqb_eq. reflexivity. }
+    inversion HLo. omega.
   + (* s = SIf cond trueEval falseEval *)
-    intros countH Hfr instsBefore instsAfter insts fpc mi startCountL ir mf HHi HLo HMi HCompile HExit.
+    intros countH Hfr Lfr instsBefore instsAfter startCountL endCountL ir HHi HLo.
     simpl in HHi. destruct (get cond ir =? 0) eqn:HCond.
-    simpl in HCompile.
     * (* False condition (s2) *)
       destruct fuelH. discriminate.
-      pose inc_log as HInc.
-      specialize (HInc 1 (eval_stmt_log (S fuelH) s2 ir) countH Hfr).
-      rewrite HHi in HInc. assert (HHi' : eval_stmt_log (S fuelH) s2 ir = Some (countH - 1, Hfr)).
-      apply HInc. f_equal.
+      apply (inc_log 1 (eval_stmt_log (S fuelH) s2 ir) countH Hfr) in HHi.
       destruct fuelL. discriminate.
-      simpl in HLo. rewrite HExit in HLo. rewrite HMi in HLo. simpl in HLo. rewrite app_length in HLo. rewrite minus_plus in HLo.
-      rewrite HCompile in HLo. simpl in HLo.
-      pose fetch_inst as Hfetch.
-      specialize (
-        Hfetch
-        instsBefore
-        ((compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) ++ instsAfter)
-        (IBeqz cond (S (length (compile_stmt s1))))).
-      rewrite Hfetch in HLo.
+      simpl in HLo.
+      replace (_ =? _)%nat with false in HLo.
+      2 : { symmetry. rewrite Nat.eqb_neq. rewrite app_length. simpl. omega. }
+      replace (nth_error _ _) with (Some (IBeqz cond (S (length (compile_stmt s1))))) in HLo.
+      2 : { rewrite (
+                fetch_inst
+                instsBefore
+                ((compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) ++ instsAfter)
+                (IBeqz cond (S (length (compile_stmt s1))))). f_equal. }
+      destruct fuelL. discriminate.
       rewrite HCond in HLo.
-      destruct fuelL. discriminate.
-      specialize (IHfuelH (S fuelL) s2 (countH - 1) Hfr).
       specialize (
-        IHfuelH
+        IHfuelH (S fuelL) s2 (countH - 1) Hfr Lfr
         ((instsBefore ++ [IBeqz cond (1 + (length (compile_stmt s1)))]) ++ (compile_stmt s1) ++ [IJump (length (compile_stmt s2))])
-        instsAfter (compile_stmt s2) (2 + (length (compile_stmt s1)) + (length (compile_stmt s2)) + mi.(Ipc))%nat
-        (inc_count 1 (inc_pc (S (length (compile_stmt s1)) + 1) {| Iregs := ir; Ipc := length instsBefore; Icount := startCountL |}))
-        (startCountL + 1) ir).
-      assert (HIneq: Icount mf - (startCountL + 1) < 3 * (countH - 1) -> Icount mf - startCountL < 3 * countH). omega.
+        instsAfter (startCountL + 1) endCountL ir).
+      assert (HIneq: endCountL - (startCountL + 1) < 3 * (countH - 1) -> endCountL - startCountL < 3 * countH). omega.
       apply HIneq.
       apply IHfuelH.
-      ** rewrite HHi'. reflexivity.
-      ** rewrite <- HLo. f_equal.
-         *** rewrite <- app_assoc. rewrite <- app_assoc. f_equal. simpl. rewrite <- app_assoc. f_equal. simpl. rewrite <- app_assoc. reflexivity.
-         *** rewrite HMi. simpl. rewrite app_length. simpl. omega.
-      ** unfold inc_pc. unfold with_Ipc. unfold inc_count. unfold with_Icount. simpl. f_equal.
-         rewrite app_length. rewrite app_length. rewrite app_length. simpl. omega.
-      ** reflexivity.
-      ** rewrite HMi. rewrite app_length. rewrite app_length. rewrite app_length. simpl. rewrite app_length.
-         simpl. omega.
+      ** apply HHi.
+      ** assert(HPc: length
+                 (instsBefore ++
+                  IBeqz cond (S (length (compile_stmt s1)))
+                  :: compile_stmt s1 ++ IJump (length (compile_stmt s2)) :: compile_stmt s2) =
+                length
+                 (((instsBefore ++ [IBeqz cond (1 + length (compile_stmt s1))]) ++
+                  compile_stmt s1 ++ [IJump (length (compile_stmt s2))]) ++ compile_stmt s2)).
+         { repeat rewrite <- app_assoc. repeat rewrite app_length.
+           f_equal. simpl. rewrite app_length. simpl. reflexivity. }
+         rewrite HPc in HLo.
+         rewrite <- HLo. repeat rewrite <- app_assoc. f_equal.
+         *** unfold inc_count. unfold inc_pc. unfold with_Icount. unfold with_Ipc.
+             unfold Iregs. unfold Ipc. unfold Icount. f_equal.
+             repeat rewrite app_length. reflexivity.
     * (* True condition (s1) *)
   + (* s = SSeq s1 s2 *)
     admit.
